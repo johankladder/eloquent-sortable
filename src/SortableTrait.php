@@ -3,9 +3,9 @@
 namespace Spatie\EloquentSortable;
 
 use ArrayAccess;
-use InvalidArgumentException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
+use InvalidArgumentException;
 
 trait SortableTrait
 {
@@ -17,6 +17,8 @@ trait SortableTrait
             }
         });
     }
+
+    abstract public function newQuery();
 
     /**
      * Modify the order column value.
@@ -33,7 +35,7 @@ trait SortableTrait
      */
     public function getHighestOrderNumber(): int
     {
-        return (int) $this->buildSortQuery()->max($this->determineOrderColumnName());
+        return (int)static::applySortableGroup($this->newQuery(), $this)->max($this->determineOrderColumnName());
     }
 
     /**
@@ -60,7 +62,7 @@ trait SortableTrait
      */
     public static function setNewOrder($ids, int $startOrder = 1)
     {
-        if (! is_array($ids) && ! $ids instanceof ArrayAccess) {
+        if (!is_array($ids) && !$ids instanceof ArrayAccess) {
             throw new InvalidArgumentException('You must pass an array or ArrayAccess object to setNewOrder');
         }
 
@@ -70,7 +72,7 @@ trait SortableTrait
         $primaryKeyColumn = $model->getKeyName();
 
         foreach ($ids as $id) {
-            static::withoutGlobalScope(SoftDeletingScope::class)
+            static::applySortableGroup(self::newQuery(), self)->withoutGlobalScope(SoftDeletingScope::class)
                 ->where($primaryKeyColumn, $id)
                 ->update([$orderColumnName => $startOrder++]);
         }
@@ -83,7 +85,7 @@ trait SortableTrait
     {
         if (
             isset($this->sortable['order_column_name']) &&
-            ! empty($this->sortable['order_column_name'])
+            !empty($this->sortable['order_column_name'])
         ) {
             return $this->sortable['order_column_name'];
         }
@@ -108,12 +110,12 @@ trait SortableTrait
     {
         $orderColumnName = $this->determineOrderColumnName();
 
-        $swapWithModel = $this->buildSortQuery()->limit(1)
+        $swapWithModel = static::applySortableGroup($this->newQuery(), $this)->limit(1)
             ->ordered()
             ->where($orderColumnName, '>', $this->$orderColumnName)
             ->first();
 
-        if (! $swapWithModel) {
+        if (!$swapWithModel) {
             return $this;
         }
 
@@ -129,7 +131,7 @@ trait SortableTrait
     {
         $orderColumnName = $this->determineOrderColumnName();
 
-        $swapWithModel = $this->buildSortQuery()->limit(1)
+        $swapWithModel = static::applySortableGroup($this->newQuery(), $this)->limit(1)
             ->ordered('desc')
             ->where($orderColumnName, '<', $this->$orderColumnName)
             ->first();
@@ -194,7 +196,8 @@ trait SortableTrait
         $this->$orderColumnName = $firstModel->$orderColumnName;
         $this->save();
 
-        $this->buildSortQuery()->where($this->getKeyName(), '!=', $this->id)->increment($orderColumnName);
+
+        static::applySortableGroup($this->newQuery(), $this)->where($this->getKeyName(), '!=', $this->id)->increment($orderColumnName);
 
         return $this;
     }
@@ -219,7 +222,8 @@ trait SortableTrait
         $this->$orderColumnName = $maxOrder;
         $this->save();
 
-        $this->buildSortQuery()->where($this->getKeyName(), '!=', $this->id)
+
+        static::applySortableGroup($this->newQuery(), $this)->where($this->getKeyName(), '!=', $this->id)
             ->where($orderColumnName, '>', $oldOrder)
             ->decrement($orderColumnName);
 
@@ -227,12 +231,33 @@ trait SortableTrait
     }
 
     /**
-     * Build eloquent builder of sortable.
+     * @param QueryBuilder        $query
+     * @param Model|SortableTrait $model
      *
-     * @return \Illuminate\Database\Eloquent\Builder
+     * @return QueryBuilder
      */
-    public function buildSortQuery()
+    protected static function applySortableGroup($query, $model)
     {
-        return static::query();
+        $sortableGroupField = $model->getSortableGroupField();
+
+        if (is_array($sortableGroupField)) {
+            foreach ($sortableGroupField as $field) {
+                $query = $query->where($field, $model->$field);
+            }
+        } elseif ($sortableGroupField !== null) {
+            $query = $query->where($sortableGroupField, $model->$sortableGroupField);
+        }
+
+        return $query;
+    }
+
+    /**
+     * @return string|null
+     */
+    public function getSortableGroupField()
+    {
+        $sortableGroupField = isset($this->sortable['sort_by_group_column']) ? $this->sortable['sort_by_group_column'] : null;
+
+        return $sortableGroupField;
     }
 }
